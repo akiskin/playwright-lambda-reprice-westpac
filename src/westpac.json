@@ -1,0 +1,36 @@
+{
+    "credentials": {
+        "username": "...",
+        "password": "..."
+    },
+    "customer": {
+        "firstName": "Alex",
+        "lastName": "Kaz",
+        "phone": "0422169955",
+        "dob": "01/01/1960",
+        "segment": "Private Client"
+    },
+    "loans": [
+        {
+            "loanNumber": "1234567890",
+            "interestRate": 2.3,
+            "product": {
+                "group": " NON-PACKAGE Variable ",
+                "product": "NON PACKAGED: Base Variable P+I"
+            },
+            "purpose": "Residential Investor",
+            "limit": 400000,
+            "postcode": "5000",
+            "dwellingType": "Non-Apartment",
+            "requestedRate": 1.9,
+            "competitor": {
+                "name": "CUA",
+                "product": "Package - Variable",
+                "rate": 1.9
+            }
+
+        }
+    ],
+    "totalValue": 700000,
+    "escalationMessage": "Please, review...."
+}
