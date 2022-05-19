@@ -9,7 +9,7 @@ RUN mkdir -p ${FUNCTION_DIR}
 WORKDIR ${FUNCTION_DIR}
 RUN npm install aws-lambda-ric
 COPY src/* ${FUNCTION_DIR}
-RUN npm install playwright@1.21.0
+RUN npm install playwright@1.21.0 @aws-sdk/client-s3
 
 
 # Grab a fresh slim copy of the image to reduce the final size
