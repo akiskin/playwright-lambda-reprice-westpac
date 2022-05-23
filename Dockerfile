@@ -8,9 +8,8 @@ RUN apt update && apt upgrade -y && apt install -y g++ make cmake unzip libcurl4
 RUN mkdir -p ${FUNCTION_DIR}
 WORKDIR ${FUNCTION_DIR}
 RUN npm install aws-lambda-ric
-COPY src/* ${FUNCTION_DIR}
 RUN npm install playwright@1.21.0 @aws-sdk/client-s3
-
+COPY src/* ${FUNCTION_DIR}
 
 # Grab a fresh slim copy of the image to reduce the final size
 FROM mcr.microsoft.com/playwright:v1.21.0-focal
