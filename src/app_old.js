@@ -6,8 +6,8 @@ const { S3Client , PutObjectCommand } = require("@aws-sdk/client-s3");
 const AWS_REGION = "ap-southeast-2";
 const s3Client = new S3Client({ region: AWS_REGION });
 
-const HEADLESS = false; // For local dev - MUST be false for Lambda environment
-const LOCAL_LOG = true; // Write log to local file - MUST be false for Lambda environment
+const HEADLESS = true; // For local dev - MUST be false for Lambda environment
+const LOCAL_LOG = false; // Write log to local file - MUST be false for Lambda environment
 
 const engine = chromium;
 
@@ -117,139 +117,111 @@ const handler = async function(lambda_event, lambda_context) {
             throw new Error('Repricing tool button not found');
         }
 
-        const [page1] = await Promise.all([
+        const [newPage] = await Promise.all([
             context.waitForEvent('page'),
             repricingTollButtonLocator.click()
         ])
-        await page1.waitForLoadState();
-
-        log('Reprice tool in new tab', await page1.screenshot());
-
-        ///////////////////////////
-
-        await page1.locator('text=Yes').click();
-        await page1.locator('text=Personal').click();
-
-        await page1.locator('[data-testid="firstName"]').fill(config.customer.firstName);
-        await page1.locator('[data-testid="lastName"]').fill(config.customer.lastName);
-        await page1.locator('[data-testid="personalPhoneNumber"]').fill(config.customer.phone);
-        await page1.locator('input[name="dob"]').fill(config.customer.dob);
-
-        // Segment dropdown
-        await page1.locator('#dropdown-toggle-button-customerSegment').click();
-        await page1.locator('text=' + config.customer.segment).click();
-        await page1.waitForTimeout(1000); // Let framework update internal state
-
-        log('STEP', await page1.screenshot());
-
-        // Next
-        //await page1.locator('[data-testid="nextButton"]').click();
-        await page1.locator('button:has-text("Next")').click();
+        await newPage.waitForLoadState();
+        
+        //Wait for input#brokerFirstName is filled
+        let brokerName = await newPage.locator('input#brokerFirstName').inputValue();
+        let tries = 0;
+        while ((brokerName === '') && (tries < 10)) {
+            await newPage.waitForTimeout(1000);
+            brokerName = await newPage.locator('input#brokerFirstName').inputValue();
+            tries++;
+        }
 
 
-        // Add loans (TODO in a cycle in future)
+        log('Reprice tool in new tab', await newPage.screenshot());
 
-        //await page1.locator('[data-testid="addLoan"]').click();
-        await page1.locator('button:has-text("Add a loan")').click();
-
-        await page1.locator('text=Yes').click();
-        await page1.locator('[data-testid="existingAccountNumber"]').fill(config.loans[0].loanNumber);
-        await page1.locator('[data-testid="existingRate"]').fill(config.loans[0].interestRate.toString()); //TODO ensure X.Y format
-
-        // Group & Product dropdowns
-        await page1.locator('#dropdown-toggle-button-productGroup').click();
-        await page1.locator('text=NON-PACKAGE Variable').click(); //TODO
-        await page1.waitForTimeout(1000); // To have connected dropdown with products populated
-        await page1.locator('#dropdown-toggle-button-product').click();
-        await page1.locator('text=NON PACKAGED: Base Variable P+I').click(); //TODO
-
-        await page1.locator('[data-testid="loanLimit"]').fill(config.loans[0].limit.toString());
-
-        // Purpose dropdown
-        await page1.locator('#dropdown-toggle-button-loanPurpose').click();
-        await page1.locator('text=Residential Investor').click(); //TODO
-
-        await page1.locator('[data-testid="postCode"]').fill(config.loans[0].postcode);
-
-        // Dwelling type dropdown
-        await page1.locator('#dropdown-toggle-button-dwellingType').click();
-        await page1.locator('text=Non-Apartment').click(); //TODO
-
-        await page1.locator('[data-testid="requestNewRate"] >> text=Yes').click();
-
-        await page1.locator('[data-testid="hasCompetitorOffer"] >> text=Yes').click();
-
-        // Competitor dropdown
-        await page1.locator('#dropdown-toggle-button-competitorName').click();
-        await page1.locator('text=CUA').click();
-
-        // Competitor product dropdown
-        await page1.locator('#dropdown-toggle-button-competitorProductType').click();
-        await page1.locator('text=Package - Variable').click(); //TODO
-
-        await page1.locator('[data-testid="competitorRate"]').fill(config.loans[0].competitor.rate.toString()); //TODO
-
-        await page1.locator('[data-testid="requestedRate"]').fill(config.loans[0].requestedRate.toString());
-
-        log('STEP', await page1.screenshot());
-
-        // Next (add loan)
-        //await page1.locator('[data-testid="nextButton"]').click();
-        await page1.locator('button:has-text("Add loan")').click();
-
-        // Note: we should be back to table with all added loands now
-
-        // Request type dropdown
-        await page1.waitForTimeout(1000);
-        await page1.locator('#dropdown-toggle-button-requestType').click();
-        await page1.locator('text=Existing lending only').click();
-        await page1.waitForTimeout(1000);
-
-        await page1.locator('[data-testid="totalSecurityValue"]').fill(config.totalValue.toString());
-
-        log('STEP', await page1.screenshot());
-
-        // Next - to confirmation screen
-        //await page1.locator('[data-testid="nextButton"]').click();
-        await page1.locator('button:has-text("Next")').click();
-
-        log('STEP', await page1.screenshot());
-
-        // Next - to decision screen
-        //await page1.locator('[data-testid="nextButton"]').click();
-        await page1.locator('button:has-text("Submit")').click();
-
-        log('STEP', await page1.screenshot());
+        await newPage.locator('button:has-text("Continue")').click();
+        await newPage.locator('input#firstName').waitFor({timeout: 5000});
+        log('After clicking Continue', await newPage.screenshot());
 
 
-        // Extract offered rate
-        const offeredRateLabelText = await page1.locator('td[headers="proposedRate"]').allTextContents();
+        ////
+        // CUSTOMER INFO
+        await newPage.fill('input#firstName', config.customer.firstName);
+        await newPage.fill('input#lastName', config.customer.lastName);
+        await newPage.fill('input#phoneNumber', config.customer.phone);
+        await newPage.fill('input#dateOfBirth', config.customer.dob);
+        await newPage.click('input#existingCustomeryes');
+        log('Fill customer details', await newPage.screenshot());
+
+        await newPage.locator('button:has-text("Continue")').click();
+        await newPage.waitForTimeout(2000);
+        log('After clicking Continue', await newPage.screenshot());
+
+
+        ////
+        // LOAN INFO
+        await newPage.locator('input#yesExistingLoan0').waitFor({timeout: 3000});
+        await newPage.locator('input#yesExistingLoan0').click();
+
+        await newPage.fill('input#existingAccountNumber0', config.loans[0].loanNumber);
+        await newPage.fill('input#existingRate0', config.loans[0].interestRate.toString());
+        
+        await selectOptionByVisibleText(newPage, 'select#productGroup0', config.loans[0].product.group);
+
+        await selectOptionByVisibleText(newPage, 'select#product0', config.loans[0].product.product);
+        await selectOptionByVisibleText(newPage, 'select#loanPurpose0', config.loans[0].purpose);
+
+        await newPage.fill('input#loanLimit0', config.loans[0].limit.toString());
+        await newPage.fill('input#securityPostcode0', config.loans[0].postcode);
+
+        await selectOptionByVisibleText(newPage, 'select#dwellingType0', config.loans[0].dwellingType);
+
+
+        await newPage.locator('input#yesReprice0').click(); //This makes visible the following fields:
+
+        await newPage.fill('input#requestedRate0', config.loans[0].requestedRate.toString());
+        
+        await newPage.locator('input#yesCompetitorRate0').click();
+        await newPage.locator('input#noWrittenConfirmation0').click();
+        await selectOptionByVisibleText(newPage, 'select#competitorName0', config.loans[0].competitor.name);
+        await selectOptionByVisibleText(newPage, 'select#competitorProduct0', config.loans[0].competitor.product);
+        await newPage.fill('input#competitorRateOffered0', config.loans[0].competitor.rate.toString());
+        
+        log('Fill loan[0] details', await newPage.screenshot());
+        await newPage.locator('button:has-text("Continue")').first().click();
+        await newPage.waitForTimeout(2000);
+        log('After clicking Continue', await newPage.screenshot());
+
+
+        ////
+        // ADDITIONAL INFO
+
+        //TODO waitFor - check if modal is open
+        await selectOptionByVisibleText(newPage, 'div.modal-content select#lblsegment:visible', config.customer.segment);
+        await selectOptionByVisibleText(newPage, 'div.modal-content select#lblrequesttype:visible', 'Existing lending only');
+        await newPage.fill('div.modal-content input#lbltotalSecurityValue:visible', config.totalValue.toString());
+
+        log('Fill additional info', await newPage.screenshot());
+        await newPage.locator('div.modal-body button:has-text("Submit"):visible').first().click();
+        await newPage.waitForTimeout(2000);
+        log('After clicking Submit', await newPage.screenshot());
+
+        ////
+        // CHECK OUTCOME AND ESCALATE
+
+        const offeredRateLabelText = await newPage.locator('div.rateLabel').allTextContents();
         logText('Offer: ' + offeredRateLabelText.join(' '));
 
+        await newPage.locator('button:has-text("Escalate")').first().click();
 
-        // Escalate button
-        //await page1.locator('[data-testid="backButton"]').click();
-        await page1.locator('button:has-text("Escalate")').click();
-        // Note: there also is "Accept" button
+        
+        await selectOptionByVisibleText(newPage, 'select#escalationReason', 'Manual review required (Pricing Team use only)');
+        await newPage.fill('textarea#additionalInformation', config.escalationMessage);
 
-        // Escalation reason dropdown
-        await page1.locator('#dropdown-toggle-button-escalationReasonCode').click();
-        await page1.locator('text=Manual review required (Pricing Team use only)').click();
+        log('Fill escalation info', await newPage.screenshot());
+        //TODO Submit escalation (button: Submit Escalation)
 
-        await page1.locator('textarea#comments').fill(config.escalationMessage);
-
-        log('STEP', await page1.screenshot());
-
-        // Submit escalation TODO
-        //await page1.locator('button:has-text("Submit")').click();
         
 
         await page.locator('button:has-text("Log out")').click();
         await page.waitForTimeout(3000);
         log('After logout', await page.screenshot());
-
-        await context.close();
-        await browser.close();
     }
     catch(exception) {
         logText(exception.toString());
@@ -262,6 +234,10 @@ const handler = async function(lambda_event, lambda_context) {
 
     const results = await s3Client.send(new PutObjectCommand({Bucket: 'reprice-logs', Key: bucket_log_file, Body: textLogContents}));
     
+    try {
+        await browser.close();
+    } catch (exception) {}
+
     return bucket_log_file;
 }
 
