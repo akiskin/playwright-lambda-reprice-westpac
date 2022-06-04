@@ -2,6 +2,7 @@
 const fs = require('fs');
 const { chromium } = require('playwright');
 const { S3Client , PutObjectCommand } = require("@aws-sdk/client-s3");
+const { randomUUID } = require('crypto');
 
 const AWS_REGION = "ap-southeast-2";
 const s3Client = new S3Client({ region: AWS_REGION });
@@ -19,18 +20,20 @@ const handler = async function(lambda_event, lambda_context) {
     if (LOCAL_LOG) {
         var stream = fs.createWriteStream("westpac.log.html");
     }
-    const bucket_log_file = 'example_file';
 
-    var textLogContents = '';
+    const formattedDate = (new Date()).toISOString().replace(/[^0-9]/g, ''); // Note: msec, UTC
+    const bucket_log_file = 'nab_' + formattedDate + '_' + randomUUID();
+
+    var textLogContents = '<html><body><header></header>';
     const log = (text, buffer) => {
-        const piece = '<br>' + text + '<br><img src="data:image/png;base64,' + buffer.toString('base64') + '" />' + "\n"
+        const piece = '<p><span>' + text + '</span><img src="data:image/png;base64,' + buffer.toString('base64') + '" />' + "</p>\n"
         if (LOCAL_LOG) {
             stream.write(piece);
         }
         textLogContents += piece;
     }
     const logText = (text) => {
-        const piece = '<br>' + text + "\n"
+        const piece = '<p><span>' + text + "</span></p>\n"
         if (LOCAL_LOG) {
             stream.write(piece);
         }
@@ -256,6 +259,8 @@ const handler = async function(lambda_event, lambda_context) {
     }
 
     // Finalize local log and upload log to s3
+    textLogContents += '<footer></footer></body></html>'
+
     if (LOCAL_LOG) {
         stream.end();
     }
