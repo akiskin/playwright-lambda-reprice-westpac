@@ -2,14 +2,14 @@ const fs = require('fs');
 const { chromium } = require('playwright');
 const { S3Client , PutObjectCommand } = require("@aws-sdk/client-s3");
 const { randomUUID } = require('crypto');
+const { WrongCredentialsError } = require('./exceptions');
 
-const AWS_REGION = "ap-southeast-2";
+const AWS_REGION = 'ap-southeast-2';
+const AWS_BUCKET = 'reprice-logs';
 const s3Client = new S3Client({ region: AWS_REGION });
 
-const HEADLESS = false; // For local dev - MUST be false for Lambda environment
-const LOCAL_LOG = true; // Write log to local file - MUST be false for Lambda environment
+const LOCAL_LOG = false; // Write log to local file - MUST be false for Lambda environment
 
-const engine = chromium;
 
 const handler = async function(lambda_event, lambda_context) {
     console.log(lambda_event);
@@ -40,63 +40,14 @@ const handler = async function(lambda_event, lambda_context) {
     }
 
 
-    // NAB's broker portal uses Akamai that by default blocks "automated" (controlled) browsers from logging in.
-    // For Chromium based browsers that is indicated by navigator.webdriver=true
-    // Note: I used to check "browser validity" with https://bot.sannysoft.com
-
-    // With Firefox there were no such issues, and the following script worked well.
-    // However, it doesn't seem viable to launch Firefox inside AWS Lambda function due to lack (prohibition) of multi-cpu features.
-    // As a result using Firefix is viable, but only in custom computing environment (EC2/Fargate).
-
-    // Chrome, on the other side can be launched in a "single-process" mode - see args below.
-    const args = [
-        "--disable-blink-features=AutomationControlled", // To set navigator.webdriver=false (https://stackoverflow.com/questions/53039551/selenium-webdriver-modifying-navigator-webdriver-flag-to-prevent-selenium-detec/60403652#60403652)
-        "--single-process", // Prevent multicore requirement - not available for AWS Lambda
-        "--no-zygote", // Prevent multicore requirement - not available for AWS Lambda
-        "--no-sandbox" // Required by --single-process
-    ];
-    const browser = await engine.launch({
-        headless: HEADLESS, 
-        args: args,
-        ignoreDefaultArgs: ["--disable-extensions"], // Looks like availability of extensions API is being checked by Akamai
-
-        // Potentially it is possible to use full Chrome, or any other browser based on Chrominum/Chrome.
-        // I had success with launching Brave (thinking it will help avoiding some fingerprinting/detection).
-        // You'll need to download compiled build from https://github.com/brave/brave-browser/releases
-        // and use parameters below:
-        //executablePath: '/opt/reprice-prototype/brave/brave',
-        //channel: 'chrome-canary',
-    });
-    const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.15 Safari/537.36',
-        permissions: ['notifications'], // Looks like availability of extensions API is being checked by Akamai
-    });
-
-    
-    const page = await context.newPage();
-
-    // In headless mode only Chromium does not populate navigator.plugins and window.chrome variables.
-    // Those variables are not writable, but we can mock them with getter.
-    await page.addInitScript(() => {
-
-        Object.defineProperty(navigator, 'plugins', {
-            get: function() {
-                return [{ name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" }];
-            },
-        });
-
-        Object.defineProperty(window, 'chrome', {
-            get: function() {
-                return {runtime: {}};
-            },
-        });
-    });
-
+    const {browser, context, page } = await prepareBrowser();
 
     // When taking a screenshot, if page is not "active", screenshot function timeouts :(
     // To be able to track which page we are currently working with, and to save
     // a screenshot in case of exception, save link to "current page".
     let currentPage = page;
+
+    let injectionResult;
 
     try {
         await page.goto('https://www.nabbroker.com.au/login#/auth');
@@ -117,6 +68,10 @@ const handler = async function(lambda_event, lambda_context) {
             ]);
         } catch (exception) {
             throw new Error('Login race failed unexpectedly');
+        }
+
+        if (await wrongCredentialsLocator.isVisible()) {
+            throw new WrongCredentialsError();
         }
         
         if (await repricingTollButtonLocator.count() === 0) {
@@ -242,6 +197,7 @@ const handler = async function(lambda_event, lambda_context) {
         
         page1.waitForTimeout(3000); //TODO
         log('Escalation - after submitting', await page1.screenshot({ fullPage: true }));
+        injectionResult = 'ESCALATED'; // or, potentially, "ACCEPTED"
 
         // Logout (button is located on the first page only)
         await page.bringToFront();
@@ -250,13 +206,13 @@ const handler = async function(lambda_event, lambda_context) {
         log('After logout', await page.screenshot());
 
     } catch(exception) {
+        injectionResult = exception;
         // Global log for any exception - manually thrown or playwright's (timeout, etc)
         log('Exception: ' + exception.toString(), await currentPage.screenshot({ fullPage: true }));
     }
 
     // Try to gracefully shutdown browser regardless of any prior errors
     try {
-        await context.close();
         await browser.close();
     } catch(exception) {}
 
@@ -267,14 +223,79 @@ const handler = async function(lambda_event, lambda_context) {
         stream.end();
     }
 
-    const results = await s3Client.send(new PutObjectCommand({Bucket: 'reprice-logs', Key: bucket_log_file, Body: textLogContents}));
+    const results = await s3Client.send(new PutObjectCommand({Bucket: AWS_BUCKET, Key: bucket_log_file, Body: textLogContents}));
     
-    //TODO meaningful return - login failed / error / etc
-    return bucket_log_file;
+    return finalize(injectionResult, bucket_log_file);
 }
 
 exports.handler = handler;
 
+const prepareBrowser = async () => {
+    // NAB's broker portal uses Akamai that by default blocks "automated" (controlled) browsers from logging in.
+    // For Chromium based browsers that is indicated by navigator.webdriver=true
+    // Note: I used to check "browser validity" with https://bot.sannysoft.com
+
+    // With Firefox there were no such issues, and the following script worked well.
+    // However, it doesn't seem viable to launch Firefox inside AWS Lambda function due to lack (prohibition) of multi-cpu features.
+    // As a result using Firefix is viable, but only in custom computing environment (EC2/Fargate).
+
+    // Chrome, on the other side can be launched in a "single-process" mode - see args below.
+    const args = [
+        "--disable-blink-features=AutomationControlled", // To set navigator.webdriver=false (https://stackoverflow.com/questions/53039551/selenium-webdriver-modifying-navigator-webdriver-flag-to-prevent-selenium-detec/60403652#60403652)
+        "--single-process", // Prevent multicore requirement - not available for AWS Lambda
+        "--no-zygote", // Prevent multicore requirement - not available for AWS Lambda
+        "--no-sandbox" // Required by --single-process
+    ];
+    const browser = await chromium.launch({
+        headless: true, 
+        args: args,
+        ignoreDefaultArgs: ["--disable-extensions"], // Looks like availability of extensions API is being checked by Akamai
+
+        // Potentially it is possible to use full Chrome, or any other browser based on Chrominum/Chrome.
+        // I had success with launching Brave (thinking it will help avoiding some fingerprinting/detection).
+        // You'll need to download compiled build from https://github.com/brave/brave-browser/releases
+        // and use parameters below:
+        //executablePath: '/opt/reprice-prototype/brave/brave',
+        //channel: 'chrome-canary',
+    });
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.4951.15 Safari/537.36',
+        permissions: ['notifications'], // Looks like availability of extensions API is being checked by Akamai
+    });
+
+    
+    const page = await context.newPage();
+
+    // In headless mode only Chromium does not populate navigator.plugins and window.chrome variables.
+    // Those variables are not writable, but we can mock them with getter.
+    await page.addInitScript(() => {
+
+        Object.defineProperty(navigator, 'plugins', {
+            get: function() {
+                return [{ name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" }];
+            },
+        });
+
+        Object.defineProperty(window, 'chrome', {
+            get: function() {
+                return {runtime: {}};
+            },
+        });
+    });
+
+    return { browser, context, page };
+}
+
+const finalize = (injectionResult, bucket_log_file) => {
+    if (injectionResult instanceof WrongCredentialsError) {
+        return {'log': bucket_log_file, 'error': 'WrongCredentials'}
+    } else if (injectionResult instanceof Error) {
+        return {'log': bucket_log_file, 'error': 'Other'}
+    }
+
+    // Consider this a success
+    return {'log': bucket_log_file, 'result': injectionResult};
+}
 
 // Generic helper for <select> dropdown
 const selectOptionByVisibleText = async (page, selector, text) => {
