@@ -17,7 +17,7 @@ const handler = async function(lambda_event, lambda_context) {
     const config = JSON.parse(lambda_event.body);
 
     if (LOCAL_LOG) {
-        var stream = fs.createWriteStream("westpac.log.html");
+        var stream = fs.createWriteStream("nab.log.html");
     }
 
     const formattedDate = (new Date()).toISOString().replace(/[^0-9]/g, ''); // Note: msec, UTC
@@ -103,7 +103,7 @@ const handler = async function(lambda_event, lambda_context) {
         await page1.locator('[data-testid="lastName"]').fill(config.customer.lastName);
         await page1.locator('[data-testid="personalPhoneNumber"]').fill(config.customer.phone);
         await page1.locator('input[name="dob"]').fill(config.customer.dob);
-        await selectFromDropdown(page1, '#dropdown-toggle-button-customerSegment', config.customer.segment);
+        await selectFromDropdown(page1, '#dropdown-toggle-button-customerSegment', "Private Client");
 
         log('Customer details - before submitting', await page1.screenshot({ fullPage: true }));
         await page1.locator('button:has-text("Next")').click();
@@ -140,16 +140,20 @@ const handler = async function(lambda_event, lambda_context) {
 
             await page1.locator('#postCode').fill(loan.postcode);
 
-            await selectFromDropdown(page1, '#dropdown-toggle-button-dwellingType', loan.dwellingType);
+            await selectFromDropdown(page1, '#dropdown-toggle-button-dwellingType', "Non-Apartment");
 
-            // Competition data
-            await page1.locator('[data-testid="requestNewRate"] >> text=Yes').click();
-            await page1.locator('[data-testid="hasCompetitorOffer"] >> text=Yes').click();
-            await selectFromDropdown(page1, '#dropdown-toggle-button-competitorName', loan.competitor.name);
-            await selectFromDropdown(page1, '#dropdown-toggle-button-competitorProductType', loan.competitor.product);
-            await page1.locator('#competitorRate').fill(formatInterestRate(loan.competitor.rate));
+            // Need reprice? + Competition data
+            if (loan.doReprice) {
+                await page1.locator('[data-testid="requestNewRate"] >> text=Yes').click();
+                await page1.locator('[data-testid="hasCompetitorOffer"] >> text=Yes').click();
+                await selectFromDropdown(page1, '#dropdown-toggle-button-competitorName', loan.competitor.name);
+                await selectFromDropdown(page1, '#dropdown-toggle-button-competitorProductType', loan.competitor.product);
+                await page1.locator('#competitorRate').fill(formatInterestRate(loan.competitor.rate));
 
-            await page1.locator('#requestedRate').fill(formatInterestRate(loan.requestedRate));
+                await page1.locator('#requestedRate').fill(formatInterestRate(loan.requestedRate));
+            } else {
+                await page1.locator('[data-testid="requestNewRate"] >> text=No').click();
+            }
 
             log('Loan details - before submitting', await page1.screenshot({ fullPage: true }));
             await page1.locator('button:has-text("Add loan")').click();
