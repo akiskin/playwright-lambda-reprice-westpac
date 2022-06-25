@@ -48,6 +48,7 @@ const handler = async function(lambda_event, lambda_context) {
     let currentPage = page;
 
     let injectionResult;
+    let additionalDataToReturn = {};
 
     try {
         await page.goto('https://www.nabbroker.com.au/login#/auth');
@@ -178,6 +179,8 @@ const handler = async function(lambda_event, lambda_context) {
 
 
 
+        log('Offer page - before making decision', await page1.screenshot({ fullPage: true }));
+
         // Check that we got expected page
         await validateLayout(page1, 'button:has-text("Accept")');
 
@@ -186,22 +189,51 @@ const handler = async function(lambda_event, lambda_context) {
         const offeredRateLabelTexts = await page1.locator('[headers=proposedRate]').allTextContents();
         const offers = offeredRateLabelTexts.map(text => text.replace('Proposed rate', ''))
         // Note: in browser this works fine: document.querySelector('ipt-broker-miniapp').shadowRoot.querySelector('[headers=proposedRate] :not(span)').innerHTML
-        logText('Offers: ' + offers.join(' '));
+        logText('Offers: ' + offers.join(';'));
+        additionalDataToReturn.offers = offers.join(';');
         
+        let escalationRequired = false;
+        // Assume those proposed rated are in the same order as loans we submitted
+        for (let i = 0; i < offers.length; i++) {
+            let proposedRate = parseFloat(offers[i]);
+            if (Number.isNaN(proposedRate)) {
+                continue;
+            }
 
-        log('Offer page - before making decision', await page1.screenshot({ fullPage: true }));
-        await page1.locator('button:has-text("Escalate")').click();
+            if (proposedRate >= config.loans[i]['interestRate']) {
+                escalationRequired = true;
+                break;
+            }
+        }
 
-        // Escalation reason dropdown
-        await selectFromDropdown(page1, '#dropdown-toggle-button-escalationReasonCode', 'Manual review required (Pricing Team use only)'); // Note: hardcoded text
-        await page1.locator('textarea#comments').fill(config.escalationMessage);
+        if (escalationRequired) {
+            
+            await page1.locator('button:has-text("Escalate")').click();
 
-        log('Escalation - before submitting', await page1.screenshot({ fullPage: true }));
-        //await page1.locator('button:has-text("Submit")').click(); //TODO
-        
-        page1.waitForTimeout(3000); //TODO
-        log('Escalation - after submitting', await page1.screenshot({ fullPage: true }));
-        injectionResult = 'ESCALATED'; // or, potentially, "ACCEPTED"
+            // Escalation reason dropdown
+            await selectFromDropdown(page1, '#dropdown-toggle-button-escalationReasonCode', 'Manual review required (Pricing Team use only)'); // Note: hardcoded text
+            await page1.locator('textarea#comments').fill(config.escalationMessage);
+
+            log('Escalation - before submitting', await page1.screenshot({ fullPage: true }));
+            //await page1.locator('button:has-text("Submit")').click(); //TODO UNCOMMENT
+            
+            page1.waitForTimeout(3000); //TODO
+            log('Escalation - after submitting', await page1.screenshot({ fullPage: true }));
+            injectionResult = 'ESCALATED';
+        } else {
+
+            //await page1.locator('button:has-text("Accept")').click(); //TODO UNCOMMENT
+
+            page1.waitForTimeout(3000); //TODO
+            log('Accept - after submitting', await page1.screenshot({ fullPage: true }));
+
+            const textBox = page1.locator('text=Pricing approval has been sent').first();
+            if (textBox) {
+                additionalDataToReturn.submissionIdText =  await textBox.textContent();
+            }
+
+            injectionResult = 'ACCEPTED';
+        }
 
         // Logout (button is located on the first page only)
         await page.bringToFront();
@@ -229,7 +261,7 @@ const handler = async function(lambda_event, lambda_context) {
 
     const results = await s3Client.send(new PutObjectCommand({Bucket: AWS_BUCKET, Key: bucket_log_file, Body: textLogContents}));
     
-    return finalize(injectionResult, bucket_log_file);
+    return finalize(injectionResult, additionalDataToReturn, bucket_log_file);
 }
 
 exports.handler = handler;
@@ -251,7 +283,7 @@ const prepareBrowser = async () => {
         "--no-sandbox" // Required by --single-process
     ];
     const browser = await chromium.launch({
-        headless: true, 
+        headless: false, 
         args: args,
         ignoreDefaultArgs: ["--disable-extensions"], // Looks like availability of extensions API is being checked by Akamai
 
@@ -290,7 +322,7 @@ const prepareBrowser = async () => {
     return { browser, context, page };
 }
 
-const finalize = (injectionResult, bucket_log_file) => {
+const finalize = (injectionResult, additionalDataToReturn, bucket_log_file) => {
     if (injectionResult instanceof WrongCredentialsError) {
         return {'log': bucket_log_file, 'error': 'WrongCredentials'}
     } else if (injectionResult instanceof Error) {
@@ -298,7 +330,7 @@ const finalize = (injectionResult, bucket_log_file) => {
     }
 
     // Consider this a success
-    return {'log': bucket_log_file, 'result': injectionResult};
+    return {'log': bucket_log_file, 'result': injectionResult, 'additionalData': additionalDataToReturn};
 }
 
 // Generic helper for <select> dropdown
